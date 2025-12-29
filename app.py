@@ -1,4 +1,6 @@
 import streamlit as st
+import os
+from datetime import datetime
 import torch
 import cv2
 import numpy as np
@@ -102,16 +104,18 @@ if 'robot' not in st.session_state:
 @st.cache_resource
 def load_model():
     # CLOUD DEPLOYMENT FIX: Reassemble split model if needed
-    if not os.path.exists(MODEL_PATH):
         if os.path.exists(f"{MODEL_PATH}.part0"):
             print("Combining model parts...")
             with open(MODEL_PATH, 'wb') as outfile:
-                for i in range(3): # We have 3 parts
-                    part_file = f"{MODEL_PATH}.part{i}"
-                    if os.path.exists(part_file):
-                        with open(part_file, 'rb') as infile:
-                            outfile.write(infile.read())
-            print("Model reassembled successfully!")
+                part_num = 0
+                while True:
+                    part_file = f"{MODEL_PATH}.part{part_num}"
+                    if not os.path.exists(part_file):
+                        break
+                    with open(part_file, 'rb') as infile:
+                        outfile.write(infile.read())
+                    part_num += 1
+            print(f"Model reassembled from {part_num} parts!")
             
     model = smp.Unet(encoder_name="efficientnet-b3", in_channels=4, classes=1, encoder_weights=None)
     try:
