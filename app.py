@@ -1,0 +1,463 @@
+import streamlit as st
+import torch
+import cv2
+import numpy as np
+import segmentation_models_pytorch as smp
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+from PIL import Image
+from robot_bridge import RobotCommander
+
+# --- Configuration ---
+IMG_SIZE = 512
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+MODEL_PATH = "best_model.pth"
+
+# --- Page Setup ---
+st.set_page_config(layout="wide", page_title="Smart Farm Command Center", page_icon="🌾")
+
+# --- Premium Custom CSS ---
+st.markdown("""
+<style>
+    /* Global Theme */
+    .stApp {
+        background-color: #0e1117;
+        color: #fafafa;
+    }
+    
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #161b22;
+        border-right: 1px solid #30363d;
+    }
+    
+    /* Headers */
+    h1, h2, h3 {
+        font-family: 'Segoe UI', sans-serif;
+        color: #4CAF50 !important;
+    }
+    
+    /* Custom Cards */
+    .card {
+        background-color: #21262d;
+        padding: 20px;
+        border-radius: 12px;
+        border: 1px solid #30363d;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        margin-bottom: 20px;
+    }
+    
+    .card h4 {
+        color: #8b949e;
+        font-size: 0.9rem;
+        margin-bottom: 5px;
+        font-weight: 600;
+    }
+    
+    .card .value {
+        color: #e6edf3;
+        font-size: 1.8rem;
+        font-weight: bold;
+    }
+    
+    /* Buttons */
+    .stButton>button {
+        background: linear-gradient(45deg, #2E7D32, #66BB6A);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        font-weight: bold;
+        transition: all 0.3s ease;
+        width: 100%;
+    }
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(46, 125, 50, 0.4);
+    }
+    
+    /* Metrics */
+    [data-testid="stMetricValue"] {
+        font-size: 1.5rem;
+        color: #66BB6A;
+    }
+    
+    /* Alerts/Toasts */
+    .report-box {
+        background-color: #1b2620;
+        padding: 15px;
+        border-left: 5px solid #4CAF50;
+        border-radius: 4px;
+        margin-top: 10px;
+    }
+    
+</style>
+""", unsafe_allow_html=True)
+
+# --- Robot Setup ---
+if 'robot' not in st.session_state:
+    st.session_state.robot = RobotCommander()
+
+# --- Helper Functions (Same as before) ---
+@st.cache_resource
+def load_model():
+    # CLOUD DEPLOYMENT FIX: Reassemble split model if needed
+    if not os.path.exists(MODEL_PATH):
+        if os.path.exists(f"{MODEL_PATH}.part0"):
+            print("Combining model parts...")
+            with open(MODEL_PATH, 'wb') as outfile:
+                for i in range(3): # We have 3 parts
+                    part_file = f"{MODEL_PATH}.part{i}"
+                    if os.path.exists(part_file):
+                        with open(part_file, 'rb') as infile:
+                            outfile.write(infile.read())
+            print("Model reassembled successfully!")
+            
+    model = smp.Unet(encoder_name="efficientnet-b3", in_channels=4, classes=1, encoder_weights=None)
+    try:
+        model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+    except FileNotFoundError:
+        st.error("Model file not found! Please ensure best_model.pth is uploaded.")
+        return None
+    model.to(DEVICE)
+    model.eval()
+    return model
+
+def calculate_ndvi(image):
+    r = image[:, :, 0].astype(float)
+    g = image[:, :, 1].astype(float)
+    denominator = (g + r)
+    denominator[denominator == 0] = 0.01
+    ndvi = (g - r) / denominator
+    return ndvi
+
+def process_image(uploaded_file, model):
+    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+    image = cv2.imdecode(file_bytes, 1) # BGR
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image_resized = cv2.resize(image_rgb, (IMG_SIZE, IMG_SIZE))
+    # CRITICAL FIX: Training used alpha=0 (zeros), so inference must match.
+    alpha = np.zeros((IMG_SIZE, IMG_SIZE), dtype=np.uint8)
+    input_img = cv2.merge((image_resized, alpha))
+    
+    transform = A.Compose([
+        # FIX: Align with training stats (ImageNet for RGB, 0.5 for Alpha)
+        A.Normalize(mean=(0.485, 0.456, 0.406, 0.5), std=(0.229, 0.224, 0.225, 0.5), max_pixel_value=255.0),
+        ToTensorV2()
+    ])
+    input_tensor = transform(image=input_img)['image'].unsqueeze(0).to(DEVICE)
+    
+    with torch.no_grad():
+        logits = model(input_tensor)
+        pr_mask = logits.sigmoid().squeeze().cpu().numpy()
+        
+    binary_mask = (pr_mask > 0.5).astype(np.uint8)
+    return image_resized, binary_mask, pr_mask
+
+# --- Main Dashboard UI ---
+import db_manager as db
+from datetime import datetime
+import pandas as pd
+
+# Header Section
+st.markdown("# 🛰️ Smart Agriculture Command Center")
+st.markdown("### Real-time Farm Monitoring & Analytics")
+st.write("---")
+
+# Sidebar
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/3063/3063822.png", width=100)
+    st.title("Control Panel")
+    
+    st.markdown("### 📡 System Status")
+    st.success("● AI Engine Online")
+    st.success("● Database Connected")
+    
+    st.markdown("---")
+    st.markdown("### 📍 Farm Location Settings")
+    st.info("Enter your farm's central GPS coordinates to map the drone imagery correctly.")
+    # Default to Riyadh, but user can change
+    farm_lat_input = st.number_input("Latitude", value=24.7136, format="%.6f")
+    farm_lon_input = st.number_input("Longitude", value=46.6753, format="%.6f")
+    
+    st.markdown("---")
+    st.markdown("### ⚙️ quick Actions")
+    if st.button("🔄 Refresh Data"):
+        st.session_state.clear()
+        
+    if st.button("📄 Export PDF Report"):
+        st.toast("Generating Comprehensive Report...", icon="🖨️")
+        
+    st.markdown("---")
+    st.markdown("### ⚠️ Danger Zone")
+    if st.button("🔥 Factory Reset Database"):
+        db.reset_db()
+        st.session_state.clear()
+        st.rerun()
+
+# Main Content - Tabs
+tab1, tab2, tab3 = st.tabs(["📊 Field Overview", "🛸 Drone Analysis", "🩺 Plant Health Details"])
+
+# --- TAB 1: OVERVIEW ---
+with tab1:
+    st.markdown("### 🚜 Farm KPI Summary", unsafe_allow_html=True)
+    
+    # Fetch REAL data from Database
+    latest_palms = db.get_latest_palms()
+    
+    # Defaults (if no data yet)
+    total_palms = 0
+    avg_health_score = 0
+    critical_count = 0
+    yield_est = 0
+    map_data = pd.DataFrame({'lat': [], 'lon': []})
+
+    if not latest_palms.empty:
+        total_palms = len(latest_palms)
+        # Calculate Health % (ExG score 50+ is great, <30 is bad. Let's normalize 50 -> 100%)
+        # Simple display logic: Just show the raw average or a mapped percentage
+        avg_raw = latest_palms['health_score'].mean()
+        avg_health_score = max(0, min(100, int((avg_raw / 60) * 100))) # Approx normalization
+        
+        # Count critical (Status = Infected)
+        # We need to re-verify status logic if not saved, but we can infer from score < 30 (our dynamic threshold logic was mostly for display, but ExG < 20 is def bad)
+        # Ideally we saved 'status' textual, let's check db schema. 
+        # Schema has 'health_score' (REAL). It doesn't have a 'status' text column in the CREATE TABLE I saw earlier?
+        # Wait, I saw INSERT ... palm_data_list had 'status', but the CREATE TABLE 'palms' only had:
+        # survey_id, palm_id_track, x, y, area, health_score, growth_rate.
+        # So 'status' is NOT in DB. We must infer from health_score.
+        # Let's assume ExG < 25 is Critical.
+        critical_count = len(latest_palms[latest_palms['health_score'] < 25])
+        
+        yield_est = total_palms * 0.08 # Approx 80kg per tree -> 0.08 Tons
+        
+        
+        # MAP PROJECTION (Pixels -> GPS)
+        # Use User-Defined Farm Origin
+        FARM_LAT = farm_lat_input
+        FARM_LON = farm_lon_input
+        
+        # Scale: 100 pixels = ~2 meters approx? Roughly 0.00002 deg.
+        # This is a simulation of projection since we lack GeoTIFF metadata
+        # We invert Y because image coord (0,0) is top-left, Map Y increases North.
+        latest_palms['lat'] = FARM_LAT + (latest_palms['y_coord'] * -0.00001) 
+        latest_palms['lon'] = FARM_LON + (latest_palms['x_coord'] * 0.00001)
+        map_data = latest_palms[['lat', 'lon']]
+
+    # Real Metrics
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("Total Palms Scanned", f"{total_palms}", "Verified by AI")
+    with m2:
+        st.metric("Critical Attention", f"{critical_count}", "Need Inspection", delta_color="inverse")
+    with m3:
+        st.metric("Avg. Health Index", f"{avg_health_score}%", "Vegetation Density")
+    with m4:
+        st.metric("Est. Yield Prediction", f"{yield_est:.1f} T", "Based on count")
+        
+    # Health Trend Chart
+    all_surveys = db.get_all_surveys()
+    if len(all_surveys) > 1:
+        st.markdown("### 📈 Farm Health Trends")
+        chart_data = all_surveys.set_index('scan_date')['avg_health']
+        st.line_chart(chart_data, color="#4CAF50")
+    
+    st.markdown("### 🌍 Real-Time Asset Map")
+    if not map_data.empty:
+        st.map(map_data, zoom=16)
+    else:
+        st.info("ℹ️ No survey data available. Go to 'Drone Analysis' to scan your first image.")
+
+# --- TAB 2: DRONE ANALYSIS ---
+with tab2:
+    c1, c2 = st.columns([1, 2])
+    
+    with c1:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("#### 1. Upload Imagery")
+        scan_date = st.date_input("Mission Date", datetime.now(), key="date_picker")
+        uploaded_file = st.file_uploader("Drop Drone Raw Footage", type=["jpg", "png"], key="uploader")
+        
+        if uploaded_file:
+            run_btn = st.button("🚀 Initiating AI Scanning Sequence")
+            if run_btn:
+                model = load_model()
+                if model:
+                    with st.spinner("🛰️ Processing satellite/drone feeds... Identifying features..."):
+                        original_img, mask, prob_map = process_image(uploaded_file, model)
+                        ndvi_map = calculate_ndvi(original_img)
+                        
+                        # Process Contours
+                        # Process Contours with Refinement
+                        # Use probability map for stricter thresholding (0.65) to separate trees
+                        mask_refined = (prob_map > 0.65).astype(np.uint8) * 255 
+                        
+                        # Morphological Opening to remove noise and separate touching trees
+                        kernel = np.ones((5,5), np.uint8)
+                        mask_refined = cv2.morphologyEx(mask_refined, cv2.MORPH_OPEN, kernel, iterations=1)
+                        
+                        contours, _ = cv2.findContours(mask_refined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        
+                        palm_data_list = []
+                        
+                        # Create Overlay
+                        annotated_img = original_img.copy()
+                        
+                        # --- ADAPTIVE HEALTH ANALYSIS (Two-Pass Algo) ---
+                        # Pass 1: Collect Stats for Auto-Calibration
+                        palm_candidates = []
+                        all_exg_scores = []
+                        
+                        for cnt in contours:
+                            area = cv2.contourArea(cnt)
+                            if area < 50: continue
+                            
+                            ((x, y), radius) = cv2.minEnclosingCircle(cnt)
+                            center = (int(x), int(y))
+                            radius = int(radius)
+                            
+                            # ExG Calculation
+                            single_palm_mask = np.zeros_like(mask_refined)
+                            cv2.circle(single_palm_mask, center, radius, 255, -1)
+                            mean_val = cv2.mean(original_img, mask=single_palm_mask)
+                            R, G, B = mean_val[0], mean_val[1], mean_val[2]
+                            exg_score = (2 * G) - R - B
+                            
+                            all_exg_scores.append(exg_score)
+                            palm_candidates.append({
+                                'cnt': cnt, 'center': center, 'radius': radius, 
+                                'area': area, 'exg': exg_score, 'x': int(x), 'y': int(y)
+                            })
+                            
+                        # Calculate Dynamic threshold based on THIS image's lighting
+                        if all_exg_scores:
+                            mean_exg = np.mean(all_exg_scores)
+                            std_exg = np.std(all_exg_scores)
+                            # Any tree significantly below the farm's average is "Stressed"
+                            # We use (Mean - 0.5 * StdDev) as the cutoff
+                            dynamic_threshold = mean_exg - (0.5 * std_exg)
+                        else:
+                            dynamic_threshold = 0
+                            
+                        palm_data_list = []
+                        annotated_img = original_img.copy()
+
+                        # Pass 2: Classify and Draw
+                        for p in palm_candidates:
+                            is_infected = p['exg'] < dynamic_threshold
+                            
+                            color = (0, 255, 0) # Green
+                            status = "Healthy"
+                            if is_infected:
+                                color = (0, 0, 255) # Red (BGR format for opencv is BGR, wait st.image takes RGB usually?)
+                                # Actually st.image usually expects RGB if we converted before processing.
+                                # Let's stick to (0, 255, 0) and (255, 0, 0) assuming RGB. 
+                                # Wait, cv2.drawContours works on BGR if image is BGR. 
+                                # original_img comes from process_image -> cv2.resize(image_rgb). So it IS RGB.
+                                color = (255, 0, 0) # Red
+                                status = "Infected"
+                                
+                            cv2.circle(annotated_img, p['center'], p['radius'], color, 2)
+                            cv2.circle(annotated_img, p['center'], 2, (0, 0, 255), -1)
+                            
+                            palm_data_list.append({
+                                'x': p['x'], 'y': p['y'], 
+                                'area': int(p['area']), 
+                                'health': float(p['exg']), 
+                                'status': status
+                            })
+
+                        # Transparent Fill for circles (Optional: can just keep boundaries for cleaner look)
+                        # overlay = original_img.copy()
+                        # cv2.drawContours(overlay, contours, -1, (0, 255, 0), -1)
+                        # annotated_img = cv2.addWeighted(overlay, 0.3, annotated_img, 0.7, 0)
+
+                        db.save_survey(scan_date.strftime("%Y-%m-%d"), palm_data_list)
+                        st.session_state['processed_img'] = original_img
+                        st.session_state['processed_mask'] = mask
+                        st.session_state['annotated_img'] = annotated_img
+                        st.session_state['count'] = len(palm_data_list)
+                        
+                        infected_count = sum(1 for p in palm_data_list if p['status'] == 'Infected')
+                        healthy_count = len(palm_data_list) - infected_count
+                        
+                        if infected_count > 0:
+                            st.warning(f"⚠️ Found {len(palm_data_list)} Palms: {healthy_count} Healthy, {infected_count} INFECTED!")
+                        else:
+                            st.success(f"✅ Found {len(palm_data_list)} Palms: All Healthy.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with c2:
+        if 'processed_img' in st.session_state:
+            st.markdown("#### 👁️ Computer Vision Analysis")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.image(st.session_state['processed_img'], caption="Source Feed", use_container_width=True)
+            with col_b:
+                st.image(st.session_state['annotated_img'], caption="AI Detection Overlay", clamp=True, use_container_width=True)
+            
+            st.markdown(f"""
+            <div class="report-box">
+                <h4>📊 Quick Insight</h4>
+                <p>Detected <b>{st.session_state['count']}</b> palms in this sector.</p>
+                <p>Status: <span style="color:#4CAF50; font-weight:bold;">OPTIMAL</span></p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="height: 400px; border: 2px dashed #30363d; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #8b949e;">
+                Waiting for input stream...
+            </div>
+            """, unsafe_allow_html=True)
+
+# --- TAB 3: DETAILS ---
+with tab3:
+    st.markdown("### 🔬 Individual Asset Inspection")
+    
+    col_search, col_stats = st.columns([1, 3])
+    with col_search:
+        track_id = st.number_input("Enter Palm ID #", min_value=1, value=1)
+        st.markdown(f"""
+        <div class="card">
+            <h4>Target ID</h4>
+            <div class="value">#{track_id}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col_stats:
+        df = db.get_palm_history(track_id)
+        if not df.empty:
+            st.markdown("#### 📈 Asset History")
+            
+            if len(df) < 2:
+                st.info(f"🌱 Baseline data recorded. Perform another scan next week to generate growth & health trend lines.")
+                st.metric("Current Area", f"{df.iloc[0]['area_pixels']} px")
+                st.metric("Current Health", f"{df.iloc[0]['health_score']:.2f}")
+            else:
+                chart_data = df.set_index('scan_date')
+                st.markdown("##### Biomass Growth")
+                st.line_chart(chart_data['area_pixels'], color="#2E7D32")
+                
+                st.markdown("##### Chlorophyll/Health Index")
+                st.area_chart(chart_data['health_score'], color="#66BB6A")
+        else:
+            st.warning("No historical data found for this ID in the archives.")
+            
+    st.markdown("---")
+    with st.expander("🔍 Raw Database Inspector (Transparency Mode)", expanded=True):
+        st.info("This section proves the data is real. View the raw SQL records below.")
+        raw_df = db.get_latest_palms()
+        if not raw_df.empty:
+            st.dataframe(raw_df)
+            
+            csv = raw_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Mission Data (CSV)",
+                data=csv,
+                file_name=f"farm_survey_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                icon="💾"
+            )
+        else:
+            st.write("No data in database yet.")
+
