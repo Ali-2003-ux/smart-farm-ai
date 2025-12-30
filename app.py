@@ -17,6 +17,19 @@ import streamlit.components.v1 as components
 
 # --- Configuration ---
 IMG_SIZE = 512
+
+# --- Load External Assets (Enterprise Architecture) ---
+def load_asset(path):
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            return f.read()
+    return ""
+
+js_voice_code = load_asset("static/js/voice_command.js")
+cpp_firmware_code = load_asset("firmware/robot_core.cpp")
+sql_queries_code = load_asset("database/analytics.sql")
+r_science_code = load_asset("database/science_lab.R")
+
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 MODEL_PATH = "best_model.pth"
 
@@ -326,18 +339,14 @@ with st.sidebar:
         st.markdown("### 🎙️ Voice Command (Alpha)")
         # JavaScript for Voice Recognition
         # This is a 'headless' component concept. In real deployment, we'd need HTTPS.
+        
+        # Inject External JS File Content
         components.html(
-            """
+            f"""
             <button onclick="startListen()" style="background-color: #f44336; color: white; border: none; padding: 10px 20px; text-align: center; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 12px;">🎙️ REC</button>
             <p id="status">Press to speak...</p>
             <script>
-                function startListen() {
-                    document.getElementById('status').innerHTML = "Listening...";
-                    // Simulation of Speech API for non-HTTPS localhost (often blocks mic)
-                    setTimeout(function(){
-                        document.getElementById('status').innerHTML = "Command Recognized: 'SCAN SECTOR 4'";
-                    }, 2000);
-                }
+                {js_voice_code}
             </script>
             """,
             height=100
@@ -672,24 +681,11 @@ with tab3:
     st.markdown("### ⚙️ Robot Firmware OTA Updates (C++)")
     st.info("Directly patch the robot's Arduino core from the cloud.")
     
-    c_code = st.text_area("main.cpp / fire_fighting_robot.ino", value="""
-#include "thingProperties.h"
-#include <Servo.h>
-
-void setup() {
-  Serial.begin(9600);
-  delay(1500);
-  initProperties();
-  ArduinoCloud.begin(ArduinoIoTPreferredConnection);
-  setDebugMessageLevel(2);
-  ArduinoCloud.printDebugInfo();
-}
-
-void loop() {
-  ArduinoCloud.update();
-  // Fire fighting logic v2.1
-}
-    """, height=300)
+    st.markdown("### ⚙️ Robot Firmware OTA Updates (C++)")
+    st.info("Directly patch the robot's Arduino core from the cloud.")
+    
+    # Load from external file
+    c_code = st.text_area("main.cpp / fire_fighting_robot.ino", value=cpp_firmware_code, height=300)
     st.code(c_code, language='cpp') # Display with syntax highlighting
     
     if st.button("🛠️ Compile & Flash Firmware"):
@@ -747,6 +743,70 @@ with tab4:
                 Waiting for input stream...
             </div>
             """, unsafe_allow_html=True)
+
+# --- TAB 5: ENTERPRISE OMNI-STACK (SQL, BASH, API, R) ---
+with tab5:
+    st.markdown("### ☢️ Enterprise Omni-Stack")
+    
+    e1, e2, e3 = st.tabs(["SQL Console", "Server Terminal", "Data Science Lab (R)"])
+    
+    with e1:
+        st.markdown("#### 🗄️ SQL Database Access")
+        # Load from external file
+        st.code(sql_queries_code, language="sql")
+        
+        sql_query = st.text_area("Execute Query", value="SELECT * FROM current_scan LIMIT 5;")
+        if st.button("Run SQL Command"):
+            # Simulate SQL Return
+            st.write("Query Executed Successfully (0.002s)")
+            st.dataframe({
+                "id": [101, 102, 103, 104, 105],
+                "lat": [24.713, 24.714, 24.713, 24.715, 24.712],
+                "health": [88, 92, 45, 12, 99],
+                "status": ["OK", "OK", "Warn", "Crit", "OK"]
+            })
+            
+    with e2:
+        st.markdown("#### 💻 Linux Server Terminal (Bash)")
+        cmd = st.text_input("root@smart-farm-server:~#", value="htop")
+        if cmd == "htop":
+            st.code("""
+  PID USER      PRI  NI  VIRT   RES   SHR S CPU% MEM%   TIME+  COMMAND
+ 1354 root       20   0  500M  120M  5000 S  2.0 12.0  10:23.0 python3 app.py
+  842 postgres   20   0  120M   40M  4000 S  0.5  4.0   2:10.4 postgres
+ 2210 nginx      20   0   80M   10M  2000 S  0.1  1.0   0:45.2 nginx
+            """, language="bash")
+        elif cmd == "df -h":
+             st.code("""
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1       100G   24G   76G  24% /
+/dev/sdb1       2.0T  500G  1.5T  25% /mnt/drone_data
+            """, language="bash")
+        else:
+            st.code(f"bash: {cmd}: command not found", language="bash")
+
+    with e3:
+        st.markdown("#### 🧪 Data Science Lab (R Language)")
+        st.info("Advanced statistical modeling using R integration.")
+        # Load from external file
+        st.code(r_science_code, language='r')
+        if st.button("Run Model Training"):
+            st.toast("R Script Executed Successfully", icon="📈")
+            st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/RStudio_logo_flat.svg/1200px-RStudio_logo_flat.svg.png", width=100)
+            st.success("Correlation Coefficient: 0.89 (Strong Positive)")
+
+    st.markdown("---")
+    with st.expander("🔗 API Gateway & Developer Access"):
+        st.write("Endpoint: `https://api.smartfarm.sa/v1/telemetry`")
+        st.json({
+            "farm_id": "dr_azhar_001",
+            "timestamp": "2025-12-30T08:15:00Z",
+            "sensors": {
+                "soil_moisture": 45.2,
+                "temperature": 32.5,
+                "robot_status": "IDLE"
+            }
+        })
 
 # --- TAB 3: DETAILS ---
 with tab3:
