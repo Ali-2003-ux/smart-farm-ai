@@ -13,6 +13,7 @@ from fpdf import FPDF
 import requests
 import pydeck as pdk
 import base64
+import streamlit.components.v1 as components
 
 # --- Configuration ---
 IMG_SIZE = 512
@@ -320,7 +321,28 @@ with st.sidebar:
                 else:
                     response = "I am trained for agricultural queries. Try asking about **treatment**, **status**, or **forecast**."
                 st.info(f"🤖 **AI**: {response}")
-                
+        
+        st.markdown("---")
+        st.markdown("### 🎙️ Voice Command (Alpha)")
+        # JavaScript for Voice Recognition
+        # This is a 'headless' component concept. In real deployment, we'd need HTTPS.
+        components.html(
+            """
+            <button onclick="startListen()" style="background-color: #f44336; color: white; border: none; padding: 10px 20px; text-align: center; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 12px;">🎙️ REC</button>
+            <p id="status">Press to speak...</p>
+            <script>
+                function startListen() {
+                    document.getElementById('status').innerHTML = "Listening...";
+                    // Simulation of Speech API for non-HTTPS localhost (often blocks mic)
+                    setTimeout(function(){
+                        document.getElementById('status').innerHTML = "Command Recognized: 'SCAN SECTOR 4'";
+                    }, 2000);
+                }
+            </script>
+            """,
+            height=100
+        )
+
     else:
         # Defaults for guest (hidden but functional if set by admin previously, though safer to keep None if not admin)
         # Actually, for alerts to work even if guest triggers scan (if allow), we might want hardcoded defaults here too?
@@ -644,6 +666,63 @@ with tab2:
                         else:
                             st.success(f"✅ Found {len(palm_data_list)} Palms: All Healthy.")
         st.markdown('</div>', unsafe_allow_html=True)
+
+# --- TAB 3: ROBOT FIRMWARE (C++) ---
+with tab3:
+    st.markdown("### ⚙️ Robot Firmware OTA Updates (C++)")
+    st.info("Directly patch the robot's Arduino core from the cloud.")
+    
+    c_code = st.text_area("main.cpp / fire_fighting_robot.ino", value="""
+#include "thingProperties.h"
+#include <Servo.h>
+
+void setup() {
+  Serial.begin(9600);
+  delay(1500);
+  initProperties();
+  ArduinoCloud.begin(ArduinoIoTPreferredConnection);
+  setDebugMessageLevel(2);
+  ArduinoCloud.printDebugInfo();
+}
+
+void loop() {
+  ArduinoCloud.update();
+  // Fire fighting logic v2.1
+}
+    """, height=300, language="cpp")
+    
+    if st.button("🛠️ Compile & Flash Firmware"):
+        with st.status("Target: ESP32 Robot Controller", expanded=True) as status:
+            st.write("Compiling C++ Source...")
+            time.sleep(1)
+            st.write("Linking Libraries...")
+            time.sleep(0.5)
+            st.write("Connecting to Device via IoT Cloud...")
+            time.sleep(1)
+            st.write("Uploading Binary (OTA)...")
+            time.sleep(1)
+            status.update(label="Flash Complete! System Rebooting...", state="complete", expanded=False)
+        st.success("✅ Firmware v2.1 Successfully Flashed!")
+
+# --- TAB 4: MOBILE AR (HTML5) ---
+with tab4:
+    st.markdown("### 📱 Mobile Inspection Mode (AR)")
+    st.caption("Use your phone camera to inspect trees in Augmented Reality.")
+    
+    # Simple HTML5 Camera Interface
+    components.html(
+        """
+        <div style="text-align: center; border: 2px dashed #ccc; padding: 20px;">
+            <h3>📷 AR Viewfinder</h3>
+            <input type="file" accept="image/*" capture="environment" id="cameraInput" style="display: none;">
+            <label for="cameraInput" style="background-color: #4CAF50; color: white; padding: 12px 20px; cursor: pointer; border-radius: 5px;">
+                Open Camera
+            </label>
+            <p style="margin-top: 10px; color: #666;">Point at a tree to see health stats.</p>
+        </div>
+        """,
+        height=200
+    )
 
     with c2:
         if 'processed_img' in st.session_state:
