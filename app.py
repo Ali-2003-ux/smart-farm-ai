@@ -96,6 +96,46 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+# --- Authentication Logic ---
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == "admin123":
+            st.session_state["authenticated"] = True
+            del st.session_state["password"]  # Don't store password
+        else:
+            st.session_state["authenticated"] = False
+            
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+        
+    if not st.session_state["authenticated"]:
+        st.markdown("""
+        <style>
+        .stTextInput > div > div > input {
+            background-color: #21262d; 
+            color: #fafafa;
+            border: 1px solid #30363d;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("# 🔒 Access Restricted")
+        st.markdown("### Please verify your identity to access the Farm Command Center.")
+        
+        st.text_input(
+            "Enter Administrator Password", 
+            type="password", 
+            on_change=password_entered, 
+            key="password"
+        )
+        st.stop() # Do not run the rest of the app if not authenticated
+
+check_password()
+
 # --- Robot Setup ---
 if 'robot' not in st.session_state:
     st.session_state.robot = RobotCommander()
@@ -173,6 +213,10 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3063/3063822.png", width=100)
     st.title("Control Panel")
     
+    if st.button("🔒 Logout"):
+        st.session_state.authenticated = False
+        st.rerun()
+
     st.markdown("### 📡 System Status")
     st.success("● AI Engine Online")
     st.success("● Database Connected")
@@ -188,6 +232,9 @@ with st.sidebar:
     st.markdown("### ⚙️ quick Actions")
     if st.button("🔄 Refresh Data"):
         st.session_state.clear()
+        # Preserve auth state on clear
+        st.session_state.authenticated = True 
+        st.rerun()
         
     if st.button("📄 Export PDF Report"):
         st.toast("Generating Comprehensive Report...", icon="🖨️")
@@ -196,7 +243,8 @@ with st.sidebar:
     st.markdown("### ⚠️ Danger Zone")
     if st.button("🔥 Factory Reset Database"):
         db.reset_db()
-        st.session_state.clear()
+        # Preserve auth state
+        st.session_state.authenticated = True
         st.rerun()
 
 # Main Content - Tabs
