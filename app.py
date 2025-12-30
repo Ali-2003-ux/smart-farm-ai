@@ -613,10 +613,6 @@ with tab2:
                         infected_count = sum(1 for p in palm_data_list if p['status'] == 'Infected')
                         healthy_count = len(palm_data_list) - infected_count
                         
-                                release_btn = st.button("🚁 Dispatch & Auto-Treat")
-                                if release_btn:
-                                    st.session_state.robot.dispatch(p['x'], p['y'], "INJECTION")
-                                    st.toast(f"Robot dispatched to Tree #{p_idx}", icon="🤖")
 
                         # --- NEXT-GEN FEATURE: Autonomous Pathfinding ---
                         if infected_count > 0:
