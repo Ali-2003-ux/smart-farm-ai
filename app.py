@@ -399,7 +399,7 @@ with st.sidebar:
             st.rerun()
 
 # Main Content - Tabs
-tab1, tab2, tab3 = st.tabs(["📊 Field Overview", "🛸 Drone Analysis", "🩺 Plant Health Details"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Field Overview", "🛸 Drone Analysis", "🩺 Plant Health Details", "📱 Mobile AR", "☢️ Enterprise Omni-Stack"])
 
 # --- TAB 1: OVERVIEW ---
 with tab1:
