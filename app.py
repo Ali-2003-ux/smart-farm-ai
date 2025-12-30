@@ -9,6 +9,10 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from PIL import Image
 from robot_bridge import RobotCommander
+from fpdf import FPDF
+import requests
+import pydeck as pdk
+import base64
 
 # --- Configuration ---
 IMG_SIZE = 512
@@ -84,6 +88,7 @@ st.markdown("""
         color: #66BB6A;
     }
     
+
     /* Alerts/Toasts */
     .report-box {
         background-color: #1b2620;
@@ -93,24 +98,38 @@ st.markdown("""
         margin-top: 10px;
     }
     
+    /* HIDE STREAMLIT UI ELEMENTS */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    [data-testid="stToolbar"] {visibility: hidden;}
+    
 </style>
 """, unsafe_allow_html=True)
 
 
+
 # --- Authentication Logic ---
 def check_password():
-    """Returns `True` if the user had the correct password."""
+    """Returns the role ('admin', 'guest') if authenticated, else None."""
     
     def password_entered():
         """Checks whether a password entered by the user is correct."""
-        if st.session_state["password"] == "admin123":
+        pwd = st.session_state["password"]
+        if pwd == "admin123":
             st.session_state["authenticated"] = True
-            del st.session_state["password"]  # Don't store password
+            st.session_state["role"] = "admin"
+            del st.session_state["password"]
+        elif pwd == "guest123":
+            st.session_state["authenticated"] = True
+            st.session_state["role"] = "guest"
+            del st.session_state["password"]
         else:
             st.session_state["authenticated"] = False
+            st.session_state["role"] = None
             
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
+        st.session_state["role"] = None
         
     if not st.session_state["authenticated"]:
         st.markdown("""
@@ -127,7 +146,7 @@ def check_password():
         st.markdown("### Please verify your identity to access the Farm Command Center.")
         
         st.text_input(
-            "Enter Administrator Password", 
+            "Enter Access Key", 
             type="password", 
             on_change=password_entered, 
             key="password"
@@ -135,6 +154,49 @@ def check_password():
         st.stop() # Do not run the rest of the app if not authenticated
 
 check_password()
+ROLE = st.session_state.get("role", "guest")
+
+# --- Helper Functions (New Features) ---
+def create_pdf_report(farm_name, total, infected, health, map_img=None):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(190, 10, txt=f"Mission Report: {farm_name}", ln=1, align='C')
+    
+    pdf.set_font("Arial", size=10)
+    pdf.cell(190, 10, txt=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=1, align='C')
+    
+    pdf.ln(10)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(190, 10, txt="Mission Summary", ln=1)
+    
+    pdf.set_font("Arial", size=11)
+    pdf.cell(60, 10, txt=f"Total Palms: {total}", border=1)
+    pdf.cell(60, 10, txt=f"Infected Count: {infected}", border=1)
+    pdf.cell(60, 10, txt=f"Avg Health: {health}%", border=1, ln=1)
+    
+    pdf.ln(10)
+    if infected > 0:
+        pdf.set_text_color(255, 0, 0)
+        pdf.cell(190, 10, txt=f"CRITICAL ALERT: {infected} trees require immediate attention.", ln=1)
+        pdf.set_text_color(0, 0, 0)
+    else:
+        pdf.set_text_color(0, 128, 0)
+        pdf.cell(190, 10, txt="Status: OPTIMAL. No infections detected.", ln=1)
+        pdf.set_text_color(0, 0, 0)
+        
+    return pdf.output(dest='S').encode('latin-1')
+
+def send_telegram_alert(token, chat_id, message, image_path=None):
+    if not token or not chat_id:
+        return
+        
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": message}
+    try:
+        requests.post(url, json=payload)
+    except Exception as e:
+        print(f"Telegram Error: {e}")
 
 # --- Robot Setup ---
 if 'robot' not in st.session_state:
@@ -205,7 +267,8 @@ import pandas as pd
 
 # Header Section
 st.markdown("# 🛰️ Smart Agriculture Command Center")
-st.markdown("### Real-time Farm Monitoring & Analytics")
+st.markdown("### 🌿 Farm of Dr. Azhar Mohsen Abd Hamza")
+st.markdown("_Real-time Farm Monitoring & Analytics_")
 st.write("---")
 
 # Sidebar
@@ -221,31 +284,63 @@ with st.sidebar:
     st.success("● AI Engine Online")
     st.success("● Database Connected")
     
-    st.markdown("---")
-    st.markdown("### 📍 Farm Location Settings")
-    st.info("Enter your farm's central GPS coordinates to map the drone imagery correctly.")
-    # Default to Riyadh, but user can change
-    farm_lat_input = st.number_input("Latitude", value=24.7136, format="%.6f")
-    farm_lon_input = st.number_input("Longitude", value=46.6753, format="%.6f")
-    
+    if ROLE == "admin":
+        st.markdown("---")
+        st.markdown("### 📍 Farm Location Settings")
+        st.info("Enter your farm's central GPS coordinates to map the drone imagery correctly.")
+        # Default to Riyadh, but user can change
+        farm_lat_input = st.number_input("Latitude", value=24.7136, format="%.6f")
+        farm_lon_input = st.number_input("Longitude", value=46.6753, format="%.6f")
+        
+        st.markdown("### 🔔 Alert Configuration")
+        with st.expander("Telegram Settings", expanded=True):
+            tg_token = st.text_input("Bot Token", value="8547357116:AAHn643JaXRWsvA6t7XjegyGswanx-R20U8", type="password", key="tg_token")
+            tg_chat = st.text_input("Chat ID", value="636689846", key="tg_chat")
+    else:
+        # Defaults for guest (hidden but functional if set by admin previously, though safer to keep None if not admin)
+        # Actually, for alerts to work even if guest triggers scan (if allow), we might want hardcoded defaults here too?
+        # But Guest UI hides upload, so guest can't trigger scan usually.
+        # Let's keep them None for Guest UI context, but if we want automated background alerts, logic is needed.
+        # Since logic is "If infected > 0 -> Send", and Guest can't Upload, only Admin triggers it. 
+        # So defaults in Admin block are sufficient.
+        farm_lat_input = 24.7136
+        farm_lon_input = 46.6753
+        tg_token = "8547357116:AAHn643JaXRWsvA6t7XjegyGswanx-R20U8" # Fallback if allowed
+        tg_chat = "636689846"
+        
     st.markdown("---")
     st.markdown("### ⚙️ quick Actions")
     if st.button("🔄 Refresh Data"):
         st.session_state.clear()
         # Preserve auth state on clear
         st.session_state.authenticated = True 
+        st.session_state.role = ROLE
         st.rerun()
         
     if st.button("📄 Export PDF Report"):
-        st.toast("Generating Comprehensive Report...", icon="🖨️")
+        # We need data to export, check if we have any in DB
+        latest = db.get_latest_palms()
+        if not latest.empty:
+            inf = len(latest[latest['health_score'] < 25])
+            h_score = int(latest['health_score'].mean())
+            pdf_bytes = create_pdf_report("Dr. Azhar Farm", len(latest), inf, h_score)
+            
+            b64 = base64.b64encode(pdf_bytes).decode()
+            href = f'<a href="data:application/octet-stream;base64,{b64}" download="Mission_Report.pdf" style="text-decoration:none; color:white; background-color:#4CAF50; padding:8px 16px; border-radius:4px; display:block; text-align:center;">📥 Download Signed Report</a>'
+            st.markdown(href, unsafe_allow_html=True)
+            st.toast("Report Generated Successfully!", icon="asd")
+        else:
+            st.error("No data to export.")
         
-    st.markdown("---")
-    st.markdown("### ⚠️ Danger Zone")
-    if st.button("🔥 Factory Reset Database"):
-        db.reset_db()
-        # Preserve auth state
-        st.session_state.authenticated = True
-        st.rerun()
+    if ROLE == "admin":
+        st.markdown("---")
+        st.markdown("### ⚠️ Danger Zone")
+        if st.button("🔥 Factory Reset Database"):
+            db.reset_db()
+            # Preserve auth state
+            st.session_state.authenticated = True
+            st.session_state.role = ROLE
+            st.rerun()
 
 # Main Content - Tabs
 tab1, tab2, tab3 = st.tabs(["📊 Field Overview", "🛸 Drone Analysis", "🩺 Plant Health Details"])
@@ -314,9 +409,50 @@ with tab1:
         chart_data = all_surveys.set_index('scan_date')['avg_health']
         st.line_chart(chart_data, color="#4CAF50")
     
-    st.markdown("### 🌍 Real-Time Asset Map")
+    st.markdown("### 🌍 Real-Time Asset Map (3D Digital Twin)")
     if not map_data.empty:
-        st.map(map_data, zoom=16)
+        # Normalize health for coloration (0=Red, 100=Green)
+        # We want to represent this in RGB. 
+        # map_data needs colors. 
+        
+        # Add color column based on health
+        def get_color(health):
+            # Health is 0-X. Let's assume <30 is bad. 
+            # Simple Green (0,255,0) to Red (255,0,0)
+            if health < 30: return [255, 0, 0, 150]
+            if health < 50: return [255, 165, 0, 150]
+            return [0, 255, 0, 150]
+
+        map_data['color'] = latest_palms['health_score'].apply(get_color)
+        
+        # 3D Pydeck Layer
+        layer = pdk.Layer(
+            "ColumnLayer",
+            data=map_data,
+            get_position='[lon, lat]',
+            get_elevation='health_score', # Use health or area as height
+            elevation_scale=5,
+            radius=2,
+            get_fill_color='color',
+            pickable=True,
+            auto_highlight=True,
+        )
+        
+        view_state = pdk.ViewState(
+            latitude=map_data['lat'].mean(),
+            longitude=map_data['lon'].mean(),
+            zoom=18,
+            pitch=60, # 3D Angle
+        )
+        
+        r = pdk.Deck(
+            layers=[layer],
+            initial_view_state=view_state,
+            map_style='mapbox://styles/mapbox/satellite-v9', # Satellite view
+            tooltip={"text": "Health: {health_score}\nCo: {lat}, {lon}"}
+        )
+        
+        st.pydeck_chart(r)
     else:
         st.info("ℹ️ No survey data available. Go to 'Drone Analysis' to scan your first image.")
 
@@ -435,6 +571,12 @@ with tab2:
                         
                         if infected_count > 0:
                             st.warning(f"⚠️ Found {len(palm_data_list)} Palms: {healthy_count} Healthy, {infected_count} INFECTED!")
+                            
+                            # Trigger Telegram
+                            if st.session_state.get('tg_token') and st.session_state.get('tg_chat'):
+                                msg = f"🚨 URGENT: Infection Detected in Dr. Azhar's Farm!\n\nFound {infected_count} infected trees.\nImmediate action required."
+                                send_telegram_alert(st.session_state['tg_token'], st.session_state['tg_chat'], msg)
+                                st.toast("Security Alert Sent to Mobile", icon="📱")
                         else:
                             st.success(f"✅ Found {len(palm_data_list)} Palms: All Healthy.")
         st.markdown('</div>', unsafe_allow_html=True)

@@ -6,5 +6,6 @@ numpy
 streamlit
 pandas
 timm
-
-
+fpdf
+requests
+pydeck
