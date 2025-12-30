@@ -689,7 +689,8 @@ void loop() {
   ArduinoCloud.update();
   // Fire fighting logic v2.1
 }
-    """, height=300, language="cpp")
+    """, height=300)
+    st.code(c_code, language='cpp') # Display with syntax highlighting
     
     if st.button("🛠️ Compile & Flash Firmware"):
         with st.status("Target: ESP32 Robot Controller", expanded=True) as status:
