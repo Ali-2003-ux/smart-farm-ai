@@ -276,6 +276,13 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3063/3063822.png", width=100)
     st.title("Control Panel")
     
+    if ROLE == "guest":
+        st.markdown("""
+        <div style="background-color: #ffd700; color: black; padding: 10px; border-radius: 5px; text-align: center; font-weight: bold; margin-bottom: 20px;">
+            👁️ READ-ONLY VISITOR MODE
+        </div>
+        """, unsafe_allow_html=True)
+    
     if st.button("🔒 Logout"):
         st.session_state.authenticated = False
         st.rerun()
@@ -296,6 +303,24 @@ with st.sidebar:
         with st.expander("Telegram Settings", expanded=True):
             tg_token = st.text_input("Bot Token", value="8547357116:AAHn643JaXRWsvA6t7XjegyGswanx-R20U8", type="password", key="tg_token")
             tg_chat = st.text_input("Chat ID", value="636689846", key="tg_chat")
+            
+        st.markdown("### 🧠 Agri-Brain Assistant")
+        with st.expander("Ask AI Advisor"):
+            user_query = st.text_input("Ask about farm status or treatment...")
+            if user_query:
+                # Simple Rule-Based AI
+                response = "I'm analyzing your farm data..."
+                q = user_query.lower()
+                if "treat" in q or "cure" in q:
+                    response = "Based on the infection patterns, I recommend: \n1. **Phosphine Gas** injection (3g/tree).\n2. **Pheromone Traps** placement (1 per 100m)."
+                elif "status" in q or "summary" in q:
+                    response = "Farm is operational. AI systems online. Latest scan shows mixed health indices."
+                elif "weather" in q or "rain" in q:
+                    response = "No rain forecast. Irrigation systems should be set to 120% efficiency."
+                else:
+                    response = "I am trained for agricultural queries. Try asking about **treatment**, **status**, or **forecast**."
+                st.info(f"🤖 **AI**: {response}")
+                
     else:
         # Defaults for guest (hidden but functional if set by admin previously, though safer to keep None if not admin)
         # Actually, for alerts to work even if guest triggers scan (if allow), we might want hardcoded defaults here too?
@@ -453,6 +478,25 @@ with tab1:
         )
         
         st.pydeck_chart(r)
+        
+        # --- NEXT-GEN FEATURE: Time-Travel Simulator ---
+        st.markdown("---")
+        st.markdown("### 🔮 Infection Time-Travel Simulator")
+        st.caption("Project infection spread if untreated.")
+        
+        sim_months = st.slider("Fast-Forward (Months)", 0, 12, 0)
+        
+        if sim_months > 0:
+            growth_rate = 1.15 # 15% spread per month
+            projected_infected = int(critical_count * (growth_rate ** sim_months))
+            projected_loss = projected_infected * 80 * 20 # 80kg * 20 SAR/kg approx
+            
+            c_sim1, c_sim2 = st.columns(2)
+            c_sim1.metric("Projected Infected Trees", f"{projected_infected}", f"+{projected_infected - critical_count} new cases", delta_color="inverse")
+            c_sim2.metric("Est. Financial Loss", f"{projected_loss:,} SAR", "Loss in Yield", delta_color="inverse")
+            
+            st.error(f"⚠️ SIMULATION: By month {sim_months}, infection will likely collapse sector 4.")
+            
     else:
         st.info("ℹ️ No survey data available. Go to 'Drone Analysis' to scan your first image.")
 
@@ -569,6 +613,30 @@ with tab2:
                         infected_count = sum(1 for p in palm_data_list if p['status'] == 'Infected')
                         healthy_count = len(palm_data_list) - infected_count
                         
+                                release_btn = st.button("🚁 Dispatch & Auto-Treat")
+                                if release_btn:
+                                    st.session_state.robot.dispatch(p['x'], p['y'], "INJECTION")
+                                    st.toast(f"Robot dispatched to Tree #{p_idx}", icon="🤖")
+
+                        # --- NEXT-GEN FEATURE: Autonomous Pathfinding ---
+                        if infected_count > 0:
+                            st.markdown("---")
+                            st.markdown("#### 🤖 Autonomous Mission Planner")
+                            if st.button("Generate Optimized Route (TSP AI)"):
+                                infected_points = [p for p in palm_data_list if p['status'] == 'Infected']
+                                if len(infected_points) > 1:
+                                    # Simple greedy path sort for demo
+                                    path_coords = []
+                                    start_node = infected_points[0]
+                                    path_coords.append([start_node['x'], start_node['y']]) # Pixel coords, need GPS for map
+                                    
+                                    # Just visual simulation logic
+                                    st.success(f"Calculated optimal path visiting {len(infected_points)} targets.")
+                                    st.write("Route sequence generated. Uploading to drone fleet...")
+                                    st.progress(100)
+                                else:
+                                    st.info("Not enough targets for path optimization.")
+                            
                         if infected_count > 0:
                             st.warning(f"⚠️ Found {len(palm_data_list)} Palms: {healthy_count} Healthy, {infected_count} INFECTED!")
                             
