@@ -133,7 +133,7 @@ def check_password():
             st.session_state["authenticated"] = True
             st.session_state["role"] = "admin"
             del st.session_state["password"]
-        elif pwd == "guest123":
+        elif pwd == "guest123" or pwd == "quest123":
             st.session_state["authenticated"] = True
             st.session_state["role"] = "guest"
             del st.session_state["password"]
