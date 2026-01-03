@@ -9,6 +9,8 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from PIL import Image
 from robot_bridge import RobotCommander
+import drone_planner
+import analytics
 from fpdf import FPDF
 import requests
 import pydeck as pdk
@@ -384,7 +386,7 @@ with st.sidebar:
             b64 = base64.b64encode(pdf_bytes).decode()
             href = f'<a href="data:application/octet-stream;base64,{b64}" download="Mission_Report.pdf" style="text-decoration:none; color:white; background-color:#4CAF50; padding:8px 16px; border-radius:4px; display:block; text-align:center;">📥 Download Signed Report</a>'
             st.markdown(href, unsafe_allow_html=True)
-            st.toast("Report Generated Successfully!", icon="asd")
+            st.toast("Report Generated Successfully!", icon="📄")
         else:
             st.error("No data to export.")
         
@@ -510,23 +512,46 @@ with tab1:
         
         st.pydeck_chart(r)
         
-        # --- NEXT-GEN FEATURE: Time-Travel Simulator ---
+        # --- NEXT-GEN FEATURE: AI Predictive Forecasting ---
         st.markdown("---")
-        st.markdown("### 🔮 Infection Time-Travel Simulator")
-        st.caption("Project infection spread if untreated.")
+        st.markdown("### 🔮 AI Future Yield Forecast")
         
-        sim_months = st.slider("Fast-Forward (Months)", 0, 12, 0)
+        # Get Real History
+        history_df = db.get_all_surveys()
         
-        if sim_months > 0:
-            growth_rate = 1.15 # 15% spread per month
-            projected_infected = int(critical_count * (growth_rate ** sim_months))
-            projected_loss = projected_infected * 80 * 20 # 80kg * 20 SAR/kg approx
+        if len(history_df) >= 2:
+            st.caption("Running Linear Regression on historical survey data...")
+            forecast = analytics.predict_future_yield(history_df, months_ahead=6)
             
-            c_sim1, c_sim2 = st.columns(2)
-            c_sim1.metric("Projected Infected Trees", f"{projected_infected}", f"+{projected_infected - critical_count} new cases", delta_color="inverse")
-            c_sim2.metric("Est. Financial Loss", f"{projected_loss:,} SAR", "Loss in Yield", delta_color="inverse")
-            
-            st.error(f"⚠️ SIMULATION: By month {sim_months}, infection will likely collapse sector 4.")
+            if forecast:
+                c_pred1, c_pred2 = st.columns([2, 1])
+                
+                with c_pred1:
+                    # Combine Past and Future for Charting
+                    # Past
+                    past_data = history_df[['scan_date', 'avg_health']].rename(columns={'scan_date': 'Date', 'avg_health': 'Health Index'})
+                    past_data['Type'] = 'Historical'
+                    
+                    # Future
+                    future_data = pd.DataFrame({
+                        'Date': forecast['dates'],
+                        'Health Index': forecast['health'],
+                        'Type': 'Predicted'
+                    })
+                    
+                    combined_chart = pd.concat([past_data, future_data])
+                    st.line_chart(combined_chart, x='Date', y='Health Index', color='Type')
+                
+                with c_pred2:
+                    st.metric("6-Month Trend", forecast['trend'])
+                    st.metric("Predicted Yield (6mo)", f"{forecast['yield'][-1]} T")
+                    
+                    if "Declining" in forecast['trend']:
+                        st.error("📉 Warning: Negative trend detected. Schedule nutrient intervention.")
+                    else:
+                        st.success("📈 Growth stable. Maintain current irrigation.")
+        else:
+            st.info("ℹ️ AI Forecasting requires at least 2 separate survey scans to detect trends. Pleaase perform another scan on a different date.")
             
     else:
         st.info("ℹ️ No survey data available. Go to 'Drone Analysis' to scan your first image.")
@@ -648,21 +673,41 @@ with tab2:
                         # --- NEXT-GEN FEATURE: Autonomous Pathfinding ---
                         if infected_count > 0:
                             st.markdown("---")
-                            st.markdown("#### 🤖 Autonomous Mission Planner")
-                            if st.button("Generate Optimized Route (TSP AI)"):
+                            st.markdown("#### 🤖 Autonomous Mission Planner (Precision Ops)")
+                            
+                            with st.expander("⚙️ Precision Calibration & Flight Settings", expanded=True):
+                                c_cal1, c_cal2 = st.columns(2)
+                                with c_cal1:
+                                    st.markdown("**1. Geo-Reference (Image Top-Left)**")
+                                    # Default to Farm Center if not set, but user should calibrate
+                                    anchor_lat = st.number_input("Anchor Latitude (Deg)", value=farm_lat_input, format="%.8f")
+                                    anchor_lon = st.number_input("Anchor Longitude (Deg)", value=farm_lon_input, format="%.8f")
+                                with c_cal2:
+                                    st.markdown("**2. Drone Parameters**")
+                                    gsd_val = st.number_input("Ground Sampling Distance (cm/px)", value=5.0, min_value=0.1, help="Crucial for accurate pixel-to-meter conversion. Depends on drone height/camera.")
+                                    flight_alt = st.number_input("Flight Altitude (m)", value=15.0)
+                                    flight_speed = st.number_input("Flight Speed (m/s)", value=5.0)
+
+                            if st.button("Generate Precision Flight Plan (.waypoints)"):
                                 infected_points = [p for p in palm_data_list if p['status'] == 'Infected']
-                                if len(infected_points) > 1:
-                                    # Simple greedy path sort for demo
-                                    path_coords = []
-                                    start_node = infected_points[0]
-                                    path_coords.append([start_node['x'], start_node['y']]) # Pixel coords, need GPS for map
+                                if len(infected_points) > 0:
+                                    # Generate Mission
+                                    mission_str = drone_planner.generate_mavlink_mission(
+                                        infected_points, 
+                                        anchor_lat, anchor_lon, gsd_val, 
+                                        flight_alt, flight_speed
+                                    )
                                     
-                                    # Just visual simulation logic
-                                    st.success(f"Calculated optimal path visiting {len(infected_points)} targets.")
-                                    st.write("Route sequence generated. Uploading to drone fleet...")
-                                    st.progress(100)
+                                    st.success(f"Generated Optimized Route for {len(infected_points)} targets.")
+                                    
+                                    # Create Download
+                                    b64_mission = base64.b64encode(mission_str.encode()).decode()
+                                    href_mission = f'<a href="data:text/plain;base64,{b64_mission}" download="mission_{scan_date}.waypoints" style="text-decoration:none; color:white; background-color:#2196F3; padding:10px 20px; border-radius:8px; display:block; text-align:center; font-weight:bold;">🚁 Download Mission File (MAVLink)</a>'
+                                    st.markdown(href_mission, unsafe_allow_html=True)
+                                    
+                                    st.info("ℹ️ Upload this file to QGroundControl or Mission Planner to fly.")
                                 else:
-                                    st.info("Not enough targets for path optimization.")
+                                    st.info("No infected targets to verify.")
                             
                         if infected_count > 0:
                             st.warning(f"⚠️ Found {len(palm_data_list)} Palms: {healthy_count} Healthy, {infected_count} INFECTED!")
