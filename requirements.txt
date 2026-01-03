@@ -9,3 +9,5 @@ timm
 fpdf
 requests
 pydeck
+Pillow
+scikit-learn
